@@ -1,0 +1,249 @@
+---
+title: "Clustering UFC Fighters: K-means and Hierarchical"
+author: "Jason Willett"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+@@ Read in all the data sets
+```{r}
+ufc = read.csv("ufcdataupdated.csv") # complete dataset of all fights
+ufcfighters = read.csv("ufcfighters.csv") # physical characteristics of all fighters
+bigufc = read.csv("bigufc.csv") # unpolished dataset of fights
+```
+
+## Of the 2697 fights:
+## Red won 56% of the fights.
+## Blue won 42% of the fights.
+## Draw occurred in 2% of the fights.
+
+## Create a binary win column
+```{r}
+Binwin = c(rep(0, length(ufc$Winner)))
+for (i in 1:length(ufc$Winner)) {
+  if (ufc$Winner[i] == "Red"){
+    Binwin[i] = 1
+  }
+  
+}
+ufc = data.frame(cbind(ufc,Binwin))
+```
+## Now I have added an entire column that indicates whether or not Red fighter won. It is binary. ## 1 means won and 0 means loss/draw.
+
+
+# Create a dataframe of all the fighters featured within the fights
+```{r}
+rlevs = c(levels(factor(ufc$R_fighter))) # find unique red fighters
+blevs = c(levels(factor(ufc$B_fighter))) # find unique blue fighters
+combinedlevs = c(rlevs,blevs)
+levsframe = data.frame(c(rep(0,length(combinedlevs))))
+for (i in 1:length(combinedlevs)) {
+  levsframe[i,1] = combinedlevs[i]
+  
+}
+```
+## Factor all the rows of levsframe to find more levels
+```{r}
+levsframe[,1] = factor(levsframe[,1])
+```
+## Find unique fighters for combined rlevs and blevs frame
+```{r}
+finnamelevs = data.frame(c(levels(levsframe[,1])))
+```
+## Change type of element from factor to character
+```{r}
+finnamelevs[,1] = as.character(finnamelevs[,1])
+```
+
+## Load in tidyr package
+```{r}
+library(tidyr)
+```
+## Remove unnecessary columns from ufc dataset: rowidx, referee name, location, Winner (created ## binary column)
+```{r}
+ufc = subset(ufc, select = -c(X, Unnamed..0,Referee,location,Winner))
+```
+## Load dplyr package
+# Keep only columns relating to red fighters
+```{r}
+library(dplyr)
+R_col = ufc %>% select(contains("date"),,contains("weight_class"),contains("R_"))
+```
+## Keep only columns relating to blue fighters
+```{r}
+B_col = ufc %>% select(contains("date"),contains("weight_class"),contains("B_"))
+```
+## Remove "R_" and "B_" from column names to standardize 
+```{r}
+names(R_col) = gsub("R_","",names(R_col))
+names(B_col) = gsub("B_","",names(B_col))
+```
+## Remove any remaining columns that should not be in the dataset
+```{r}
+R_col = subset(R_col, select = -c(B_avg_SIG_STatt,B_avg_SIG_STlanded,B_avg_SIG_STpct,B_avg_TOTAL_STatt,B_avg_TOTAL_STlanded,B_avg_opp_SIG_STatt,B_avg_opp_SIG_STlanded,B_avg_opp_SIG_STpct,B_avg_opp_TOTAL_STatt,B_avg_opp_TOTAL_STlanded, B_win_by_TKO_Doctor_Stoppage,age))
+B_col = subset(B_col, select = -c(R_avg_SUATT,R_avg_opp_SUATT, age))
+```
+## Remove any antecedents to standardize
+```{r}
+names(R_col) = gsub("B_","",names(R_col))
+names(B_col) = gsub("R_","",names(B_col))
+R_col[1,]
+```
+## Combine red and blue revised subsetted data into one dataset
+```{r}
+ufc = rbind(R_col,B_col)
+```
+## Find most recent fight for each fighter
+```{r}
+ufc = ufc[order(ufc$date),] #prder the fights by date
+recfight = ufc[which(ufc$fighter == finnamelevs[1,]),]
+```
+## Find most recent for each fighter and append to recfight dataframe
+```{r}
+for (i in 2:length(finnamelevs[,1])) {
+  maxx = max(which(ufc$fighter == finnamelevs[i,]))
+  fight = ufc[maxx,]
+  recfight = rbind(recfight,fight)
+  
+}
+recfight = data.frame(recfight) # make dataframe
+```
+## Make rownames the fighters name for making it clear in clustering later on
+```{r}
+rownames(recfight) = recfight$fighter
+```
+## Remove any remaining columns that will not be necessary for clustering or clumns that are not ## of interest
+```{r}
+fighter_features = subset(recfight, select = -c(losses,odds, Stance, wins,total_rounds_fought,total_time_fought.seconds.,total_title_bouts,win_by_Decision_Majority,win_by_Decision_Split,win_by_Decision_Unanimous,win_by_KO.TKO,win_by_Submission,win_by_TKO_Doctor_Stoppage,date,fighter,current_lose_streak,current_win_streak,draw,weight_class,longest_win_streak))
+```
+
+## Scale and standaridize all columns to make sure no feature is given more power because its on a larger scale
+```{r}
+m = apply(fighter_features,2,mean)
+s = apply(fighter_features,2,sd)
+fighter_features = scale(fighter_features,m,s) # z-score standardization
+```
+## Find sum of WCC for each number of clusters allowed to perform elbow method
+```{r}
+set.seed(1234)
+kmean2 = kmeans(fighter_features,2)
+mWCC_list = mean(kmean2$withinss)
+for (i in 2:10) {
+  kmea = kmeans(fighter_features, i)
+  mWCC = mean(kmea$withinss)
+  mWCC_list = c(mWCC_list,mWCC)
+}
+mWCC_list
+```
+
+
+## Create plot of sWCC to perform elbow method
+```{r}
+cluster_size = c(2:10)
+plot(cluster_size,mWCC_list[2:10], main = "Elbow Method for Determining Number of Clusters", xlab = "Number of Clusters", ylab = "Mean of WC Sum of Squares", type = "o")
+```
+## Based off elbow method, looks like 3 or 4 clusters is the optimal number of clusters
+
+## Find silhouette coefficent: alternate method for finding optimal number of clusters
+```{r}
+library(cluster)
+set.seed(2020)
+asw <- numeric(20)
+for (k in 2:20){
+  asw[k] <- pam(fighter_features, k) $ silinfo $ avg.width
+  k.best <- which.max(asw)
+}
+cat("silhouette-optimal number of clusters:", k.best, "\n")
+```
+
+
+## According to the elbow method, it appears we should set k=3. However, based off 
+## SilhouetteCoefficients, we should set k=2.
+
+## Use k-means with 2 clusters and 3 clusters 
+```{r}
+set.seed(2020)
+results2 = kmeans(fighter_features, 2)
+results3 = kmeans(fighter_features, 3)
+```
+## Explore the k-means with 3 clusters
+```{r}
+table(recfight$weight_class,results3$cluster) # table comparing cluster assignment to weight class
+plot(recfight$Weight_lbs,recfight$age,col=results3$cluster) # age vs cluster
+plot(recfight$Height_cms,recfight$Reach_cms,col=results3$cluster) # arm length
+# plots below are some fighting statistic comparisons
+plot(recfight$avg_SIG_STatt,recfight$avg_SIG_STlanded,col=results3$cluster) 
+plot(recfight$avg_HEAD_att,recfight$avg_HEAD_landed,col=results3$cluster)
+plot(recfight$avg_DISTANCE_landed,recfight$avg_opp_DISTANCE_att,col=results3$cluster)
+plot(recfight$avg_opp_GROUND_att,recfight$avg_opp_GROUND_landed,col=results3$cluster)
+```
+## Create standardized plots for fighter stats and opponent stats
+```{r}
+mha = mean(recfight$avg_HEAD_att)
+sha = sd(recfight$avg_HEAD_att)
+avg_head_att = scale(recfight$avg_HEAD_att,mha,sha)
+mhl = mean(recfight$avg_HEAD_landed)
+shl = sd(recfight$avg_HEAD_landed)
+avg_head_land = scale(recfight$avg_HEAD_landed,mhl,shl)
+mssa = mean(recfight$avg_SIG_STatt)
+sssa = sd(recfight$avg_SIG_STatt)
+avg_SS_att = scale(recfight$avg_SIG_STatt,mssa,sssa)
+moha = mean(recfight$avg_opp_HEAD_att)
+soha = sd(recfight$avg_opp_HEAD_att)
+avg_opp_head = scale(recfight$avg_opp_HEAD_att,moha,soha)
+moda = mean(recfight$avg_opp_DISTANCE_att)
+soda = sd(recfight$avg_opp_DISTANCE_att)
+avg_opp_dist = scale(recfight$avg_opp_DISTANCE_att,moda,soda)
+plot(avg_head_att,avg_SS_att,main = "Fighter Standardized Averages", xlab = "Head Attempts", ylab = "Significant Stike Attempts", col = results3$cluster)
+plot(avg_opp_dist,avg_opp_head, main = "Opponent Standarized Averages",xlab = "Opponent Distance Attempts",ylab = "Opponent Head Attempts",col = results3$cluster)
+
+```
+
+
+
+
+## Find win probability for each cluster
+```{r}
+cluster1wper = sum(recfight$wins[which(results3$cluster == 1)]) / (sum(recfight$wins[which(results3$cluster == 1)]) + (sum(recfight$losses[which(results3$cluster == 1)])) + (sum(recfight$draw[which(results3$cluster == 1)])))
+cluster2wper = sum(recfight$wins[which(results3$cluster == 2)]) / (sum(recfight$wins[which(results3$cluster == 2)]) + (sum(recfight$losses[which(results3$cluster == 2)])) + (sum(recfight$draw[which(results3$cluster == 2)])))
+cluster3wper = sum(recfight$wins[which(results3$cluster == 3)]) / (sum(recfight$wins[which(results3$cluster == 3)]) + (sum(recfight$losses[which(results3$cluster == 3)])) + (sum(recfight$draw[which(results3$cluster == 3)])))
+winp = c(cluster1wper,cluster2wper,cluster3wper)
+winp
+```
+## Cluster 1 has a significantly higher win proportion than Cluster 2. Cluster 3 has a 
+## significantly higher win proportion than Cluster 2. Cluster 1 and Cluster 3 are not 
+## significantly different. 
+## Significane was found from T-test
+
+## Hierarchal Clustering
+```{r}
+set.seed(2020)
+distances = dist(fighter_features)
+hclustermod2 = hclust(distances, method = "average")
+plot(hclustermod2, hang = -4, cex=.01)
+hclustermod = hclust(distances)
+plot(hclustermod, hang = -4, cex=.01)
+```
+
+```{r}
+set.seed(2020)
+clusterCut1 = cutree(hclustermod, 3)
+table(recfight$weight_class,clusterCut1)
+```
+```{r}
+#set.seed(2020)
+#clusterCut2 = cutree(hclustermod2, 3)
+#table(recfight$weight_class,clusterCut2)
+```
+Average Hierarchal did not do well.
+
+## Understanding clusters from k-meabs with 3 clusters (Optimal Clusters)
+```{r}
+results3
+```
+
+
+
